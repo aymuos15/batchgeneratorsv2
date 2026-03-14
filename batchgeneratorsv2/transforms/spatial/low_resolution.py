@@ -54,7 +54,8 @@ class SimulateLowResolutionTransform(ImageOnlyTransform):
 
     def _apply_to_image(self, img: torch.Tensor, **params) -> torch.Tensor:
         orig_shape = img.shape[1:]
-        # we cannot batch this because the downsampled shaps will be different for each channel
+        # We cannot batch this because the downsampled shapes will be different for each channel.
+        # F.interpolate works on any device (CPU or GPU) natively — no device transfer needed.
         for c, s in zip(params['apply_to_channel'], params['scales']):
             new_shape = [round(i * j.item()) for i, j in zip(orig_shape, s)]
             downsampled = interpolate(img[c][None, None], new_shape, mode='nearest-exact')
