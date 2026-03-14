@@ -66,31 +66,21 @@ class ContrastTransform(ImageOnlyTransform):
         if multipliers is None or idx.numel() == 0:
             return img
 
+        # Gather selected channels: shape (n, *spatial)
+        x = img[idx]
+        spatial_dims = tuple(range(1, x.ndim))
+
+        means = x.mean(dim=spatial_dims, keepdim=True)
+        m = multipliers.view(-1, *([1] * (x.ndim - 1)))
+
         if self.preserve_range:
-            for i in range(idx.numel()):
-                c = int(idx[i])
-                m = multipliers[i]
-
-                x = img[c]
-                mean = x.mean()
-                minm = x.min()
-                maxm = x.max()
-
-                x.sub_(mean)
-                x.mul_(m)
-                x.add_(mean)
-                x.clamp_(minm, maxm)
+            minm = x.amin(dim=spatial_dims, keepdim=True)
+            maxm = x.amax(dim=spatial_dims, keepdim=True)
+            x = ((x - means) * m + means).clamp(minm, maxm)
         else:
-            for i in range(idx.numel()):
-                c = int(idx[i])
-                m = multipliers[i]
+            x = (x - means) * m + means
 
-                x = img[c]
-                mean = x.mean()
-                x.sub_(mean)
-                x.mul_(m)
-                x.add_(mean)
-
+        img[idx] = x
         return img
 
 
