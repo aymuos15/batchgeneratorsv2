@@ -59,6 +59,9 @@ def blur_dimension(img: torch.Tensor, sigma: float, dim_to_blur: int, force_use_
             kernel = kernel[None, None, None, None, :]
             padding = [ksize // 2, ksize // 2, 0, 0, 0, 0]
 
+    # Ensure kernel is on the same device as the input
+    kernel = kernel.to(img.device)
+
     # Apply padding
     img_padded = pad(img, padding, mode="reflect")
 
