@@ -76,23 +76,19 @@ class SharpeningTransform(ImageOnlyTransform):
         else:
             raise ValueError(f"Unsupported spatial dimensions: {spatial_dims}. Expected 2 or 3.")
 
+        conv_op = F.conv2d if spatial_dims == 2 else F.conv3d
+
         for c, (apply, strength, clamp) in enumerate(zip(params['apply_channel'], params['strengths'], params['clamp_intensities'])):
             if not apply:
                 continue
 
             if clamp:
-                mn, mx = torch.min(img[c]), torch.max(img[c])
+                mn, mx = img[c].min(), img[c].max()
 
             x = img[c].unsqueeze(0).unsqueeze(0)  # (1, 1, H, W) or (1, 1, D, H, W)
             padded = F.pad(x, pad, mode='replicate')
-
-            if spatial_dims == 2:
-                laplace = F.conv2d(padded, kernel)
-            else:
-                laplace = F.conv3d(padded, kernel)
-
-            sharpened = x + strength * laplace
-            out[c] = sharpened.squeeze()
+            laplace = conv_op(padded, kernel)
+            out[c] = (x + strength * laplace).squeeze()
 
             if clamp:
                 out[c].clamp_(mn, mx)
