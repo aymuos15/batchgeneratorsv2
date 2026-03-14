@@ -1,9 +1,29 @@
 import numpy as np
 import torch
+import torch.nn.functional as F
 from typing import Union, Tuple
-from scipy.ndimage import median_filter
 
 from batchgeneratorsv2.transforms.base.basic_transform import ImageOnlyTransform
+
+
+def _median_filter_torch_3d(x: torch.Tensor, size: int) -> torch.Tensor:
+    """Apply 3D median filter using unfold + median. x shape: (D, H, W)."""
+    pad = size // 2
+    # Pad with replicate to match scipy behavior at boundaries
+    x_padded = F.pad(x.unsqueeze(0).unsqueeze(0), [pad] * 6, mode='replicate')[0, 0]
+    # Use unfold along each dimension to extract sliding windows
+    unfolded = x_padded.unfold(0, size, 1).unfold(1, size, 1).unfold(2, size, 1)
+    # unfolded shape: (D, H, W, size, size, size)
+    return unfolded.contiguous().view(*x.shape, -1).median(dim=-1).values
+
+
+def _median_filter_torch_2d(x: torch.Tensor, size: int) -> torch.Tensor:
+    """Apply 2D median filter using unfold + median. x shape: (H, W)."""
+    pad = size // 2
+    x_padded = F.pad(x.unsqueeze(0).unsqueeze(0), [pad] * 4, mode='replicate')[0, 0]
+    unfolded = x_padded.unfold(0, size, 1).unfold(1, size, 1)
+    # unfolded shape: (H, W, size, size)
+    return unfolded.contiguous().view(*x.shape, -1).median(dim=-1).values
 
 
 class MedianFilterTransform(ImageOnlyTransform):
@@ -45,8 +65,14 @@ class MedianFilterTransform(ImageOnlyTransform):
         }
 
     def _apply_to_image(self, img: torch.Tensor, **params) -> torch.Tensor:
-        img_np = img.cpu().numpy()
+        ndim = img.ndim - 1  # spatial dims
         for c, (apply, size) in enumerate(zip(params['apply_channel'], params['filter_sizes'])):
-            if apply:
-                img_np[c] = median_filter(img_np[c], size=size)
-        return torch.from_numpy(img_np).to(img.device)
+            if not apply:
+                continue
+            if ndim == 3:
+                img[c] = _median_filter_torch_3d(img[c], size)
+            elif ndim == 2:
+                img[c] = _median_filter_torch_2d(img[c], size)
+            else:
+                raise ValueError(f"Unsupported spatial dimensions: {ndim}")
+        return img
