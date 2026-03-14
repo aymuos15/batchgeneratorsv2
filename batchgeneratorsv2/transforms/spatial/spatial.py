@@ -65,11 +65,12 @@ class SpatialTransform(BasicTransform):
         self.padding_mode_image = padding_mode_image
         self._grid_cache = {}  # key: (patch_size, dtype) -> base grid tensor
 
-    def _get_base_grid_clone(self) -> torch.Tensor:
-        key = tuple(self.patch_size)
+    def _get_base_grid_clone(self, device=None) -> torch.Tensor:
+        dev = device if device is not None else 'cpu'
+        key = (tuple(self.patch_size), str(dev))
         g = self._grid_cache.get(key)
         if g is None:
-            g = _create_centered_identity_grid2(self.patch_size).float().contiguous()
+            g = _create_centered_identity_grid2(self.patch_size, device=device).float().contiguous()
             self._grid_cache[key] = g
         return g.clone()
 
@@ -347,8 +348,9 @@ def create_affine_matrix_2d(rotation_angle, scaling_factors):
     return RS
 
 
-def _create_centered_identity_grid2(size: Union[Tuple[int, ...], List[int]]) -> torch.Tensor:
-    space = [torch.linspace((1 - s) / 2, (s - 1) / 2, s) for s in size]
+def _create_centered_identity_grid2(size: Union[Tuple[int, ...], List[int]], device=None) -> torch.Tensor:
+    dev = device if device is not None else 'cpu'
+    space = [torch.linspace((1 - s) / 2, (s - 1) / 2, s, device=dev) for s in size]
     grid = torch.meshgrid(space, indexing="ij")
     grid = torch.stack(grid, -1)
     return grid
