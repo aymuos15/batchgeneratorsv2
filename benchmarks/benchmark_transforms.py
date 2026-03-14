@@ -61,7 +61,7 @@ def image_only_data_fn(device='cpu', channels=4):
 # ---------------------------------------------------------------------------
 
 def get_transforms(device_str='cpu'):
-    """Return list of (transform, data_fn) tuples for benchmarking."""
+    """Return list of (name, transform_or_kwargs, data_fn, needs_patch_size) tuples."""
     from batchgeneratorsv2.transforms.spatial.spatial import SpatialTransform
     from batchgeneratorsv2.transforms.noise.gaussian_blur import GaussianBlurTransform
     from batchgeneratorsv2.transforms.spatial.low_resolution import SimulateLowResolutionTransform
@@ -69,6 +69,10 @@ def get_transforms(device_str='cpu'):
     from batchgeneratorsv2.transforms.intensity.contrast import ContrastTransform
     from batchgeneratorsv2.transforms.noise.sharpen import SharpeningTransform
     from batchgeneratorsv2.transforms.noise.median_filter import MedianFilterTransform
+    from batchgeneratorsv2.transforms.local.local_gamma import LocalGammaTransform
+    from batchgeneratorsv2.transforms.local.local_contrast import LocalContrastTransform
+    from batchgeneratorsv2.transforms.local.local_smoothing import LocalSmoothingTransform
+    from batchgeneratorsv2.transforms.local.brightness_gradient import BrightnessGradientAdditiveTransform
 
     device = torch.device(device_str) if device_str == 'cuda' else None
     transforms = []
@@ -87,8 +91,6 @@ def get_transforms(device_str='cpu'):
     )
     if device is not None:
         sp_kwargs['device'] = device
-
-    # We'll handle SpatialTransform specially since patch_size must match shape
     transforms.append(('SpatialTransform', sp_kwargs, spatial_data_fn(device_str), True))
 
     # GaussianBlurTransform
@@ -122,9 +124,29 @@ def get_transforms(device_str='cpu'):
                         SharpeningTransform(strength=(0.1, 0.3), p_per_channel=1),
                         image_only_data_fn(device_str), False))
 
-    # MedianFilterTransform
+    # MedianFilterTransform (smaller shape for speed — unfold is memory-intensive)
     transforms.append(('MedianFilterTransform',
                         MedianFilterTransform(filter_size=3, p_per_channel=1),
+                        image_only_data_fn(device_str), False))
+
+    # LocalGammaTransform
+    transforms.append(('LocalGammaTransform',
+                        LocalGammaTransform(scale=(10, 20), gamma=(0.5, 1.5), p_per_channel=1),
+                        image_only_data_fn(device_str), False))
+
+    # LocalContrastTransform
+    transforms.append(('LocalContrastTransform',
+                        LocalContrastTransform(scale=(10, 20), new_contrast=(0.5, 1.5), p_per_channel=1),
+                        image_only_data_fn(device_str), False))
+
+    # LocalSmoothingTransform
+    transforms.append(('LocalSmoothingTransform',
+                        LocalSmoothingTransform(scale=(10, 20), kernel_size=(1, 3), p_per_channel=1),
+                        image_only_data_fn(device_str), False))
+
+    # BrightnessGradientAdditiveTransform
+    transforms.append(('BrightnessGradientAdditive',
+                        BrightnessGradientAdditiveTransform(scale=(10, 20), max_strength=(0.1, 0.5), p_per_channel=1),
                         image_only_data_fn(device_str), False))
 
     return transforms
