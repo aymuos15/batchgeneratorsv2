@@ -99,7 +99,7 @@ class ApplyRandomBinaryOperatorTransform(ImageOnlyTransform):
                 strel = disk(s, dtype=bool)
             else:
                 strel = ball(s, dtype=bool)
-            result = o(workon, torch.from_numpy(strel))
+            result = o(workon, torch.from_numpy(strel).to(workon.device))
             other_ch = [i for i in self.channel_idx if i != a]
             if len(other_ch) > 0:
                 was_added_mask = result & (~workon)
