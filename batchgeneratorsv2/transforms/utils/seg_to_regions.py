@@ -14,6 +14,7 @@ class ConvertSegmentationToRegionsTransform(SegOnlyTransform):
         num_regions = len(self.regions)
         region_output = torch.zeros((num_regions, *segmentation.shape[1:]), dtype=torch.bool, device=segmentation.device)
         for region_id, region_labels in enumerate(self.regions):
+            region_labels = region_labels.to(segmentation.device)
             if len(region_labels) == 1:
                 region_output[region_id] = segmentation[self.channel_in_seg] == region_labels
             else:

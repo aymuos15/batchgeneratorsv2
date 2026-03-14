@@ -5,6 +5,7 @@ Uses torch.utils.benchmark.Timer for correct GPU timing (automatic
 synchronization, adaptive iteration count, proper warmup).
 """
 import json
+import statistics
 from dataclasses import dataclass, field, asdict
 from typing import Callable, List, Optional, Tuple
 
@@ -18,21 +19,25 @@ class BenchmarkResult:
     device: str
     shape: tuple
     median_ms: float = 0.0
+    std_ms: float = 0.0
     iqr_ms: float = 0.0
     mean_ms: float = 0.0
     num_threads: int = 1
+    n_runs: int = 1
     gpu_mem_peak_mb: Optional[float] = None
 
 
 class BenchmarkRunner:
-    def __init__(self, min_run_time: float = 2.0, num_threads: int = None):
+    def __init__(self, min_run_time: float = 2.0, n_runs: int = 3,
+                 num_threads: int = None):
         """
         Args:
-            min_run_time: Minimum total seconds for the timed region.
-                          torch.utils.benchmark auto-selects iteration count.
+            min_run_time: Minimum total seconds per blocked_autorange call.
+            n_runs: Number of independent blocked_autorange runs (for std).
             num_threads: CPU thread count. None = use current default.
         """
         self.min_run_time = min_run_time
+        self.n_runs = n_runs
         self.num_threads = num_threads or torch.get_num_threads()
 
     def benchmark_transform(self, transform, data_dict_fn: Callable,
@@ -40,7 +45,7 @@ class BenchmarkRunner:
         """
         Benchmark a single transform using torch.utils.benchmark.Timer.
 
-        Timer handles warmup, adaptive iteration count, and GPU sync.
+        Runs blocked_autorange n_runs times to get std across runs.
         """
         is_gpu = device == 'cuda'
 
@@ -49,10 +54,9 @@ class BenchmarkRunner:
             device=device,
             shape=shape,
             num_threads=self.num_threads,
+            n_runs=self.n_runs,
         )
 
-        # Pre-create template data; clone per iteration so transforms
-        # that modify in-place get a fresh copy without torch.rand overhead
         template_data = data_dict_fn(shape, 42)
 
         glob = {
@@ -78,11 +82,16 @@ with torch.no_grad():
         if is_gpu:
             torch.cuda.reset_peak_memory_stats()
 
-        measurement = timer.blocked_autorange(min_run_time=self.min_run_time)
+        # Run n_runs independent measurements
+        medians = []
+        for _ in range(self.n_runs):
+            m = timer.blocked_autorange(min_run_time=self.min_run_time)
+            medians.append(m.median * 1000.0)
 
-        result.median_ms = measurement.median * 1000.0
-        result.iqr_ms = measurement.iqr * 1000.0
-        result.mean_ms = measurement.mean * 1000.0
+        result.median_ms = statistics.median(medians)
+        result.mean_ms = statistics.mean(medians)
+        result.std_ms = statistics.stdev(medians) if len(medians) > 1 else 0.0
+        result.iqr_ms = sorted(medians)[-1] - sorted(medians)[0]  # range across runs
 
         if is_gpu:
             result.gpu_mem_peak_mb = torch.cuda.max_memory_allocated() / (1024 * 1024)
@@ -92,13 +101,12 @@ with torch.no_grad():
     @staticmethod
     def print_table(all_results: List[BenchmarkResult]):
         """Pretty-print results table."""
-        header = f"{'Transform':<35} | {'Shape':<14} | {'Device':<6} | {'Median(ms)':>10} | {'IQR(ms)':>8} | {'Peak GPU(MB)':>12} | {'Speedup':>8}"
+        header = f"{'Transform':<35} | {'Shape':<14} | {'Device':<6} | {'Median(ms)':>10} | {'Std(ms)':>8} | {'Peak GPU(MB)':>12} | {'Speedup':>8}"
         sep = "-" * len(header)
         print(sep)
         print(header)
         print(sep)
 
-        # Group by (transform, shape) to compute speedup
         groups = {}
         for r in all_results:
             key = (r.transform_name, r.shape)
@@ -115,7 +123,7 @@ with torch.no_grad():
                     speedup = f"{devs['cpu'].median_ms / r.median_ms:.1f}x"
                 else:
                     speedup = "-"
-                print(f"{name:<35} | {shape_str:<14} | {dev:<6} | {r.median_ms:>10.1f} | {r.iqr_ms:>8.1f} | {peak:>12} | {speedup:>8}")
+                print(f"{name:<35} | {shape_str:<14} | {dev:<6} | {r.median_ms:>10.1f} | {r.std_ms:>8.1f} | {peak:>12} | {speedup:>8}")
         print(sep)
 
     @staticmethod
