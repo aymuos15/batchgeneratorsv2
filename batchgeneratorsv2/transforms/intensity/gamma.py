@@ -60,47 +60,45 @@ class GammaTransform(ImageOnlyTransform):
         invert_image: torch.Tensor = params["invert_image"]
         gamma: torch.Tensor = params["gamma"]
 
-        # constants
         eps = 1e-7
 
-        # Loop over selected channels (good for small C)
-        for k in range(idx.numel()):
-            c = int(idx[k])
-            r = bool(retain_stats[k])
-            inv = bool(invert_image[k])
-            g = gamma[k]
+        # Gather selected channels: shape (n, *spatial)
+        x = img[idx]
+        spatial_dims = tuple(range(1, x.ndim))
 
-            x = img[c]
+        # Invert where needed
+        inv_mask = invert_image.view(-1, *([1] * (x.ndim - 1)))
+        x = torch.where(inv_mask, -x, x)
 
-            if inv:
-                x.mul_(-1)
+        # Pre-compute stats for retain_stats channels
+        ret_mask = retain_stats
+        if ret_mask.any():
+            means_orig = x.mean(dim=spatial_dims, keepdim=True)
+            stds_orig = x.std(dim=spatial_dims, keepdim=True)
 
-            if r:
-                mean = x.mean()
-                std = x.std()
+        # Per-channel min/max for gamma correction
+        minm = x.amin(dim=spatial_dims, keepdim=True)
+        maxm = x.amax(dim=spatial_dims, keepdim=True)
+        rnge = maxm - minm
+        denom = rnge.clamp(min=eps)
 
-            minm = x.min()
-            maxm = x.max()
-            rnge = maxm - minm
-            denom = torch.clamp(rnge, min=eps)
+        # Vectorized gamma: ((x - min) / denom) ** gamma * range + min
+        gamma_vec = gamma.view(-1, *([1] * (x.ndim - 1)))
+        x = ((x - minm) / denom).pow(gamma_vec) * rnge + minm
 
-            # In-place gamma: x = (((x - min) / denom) ** g) * rnge + min
-            x.sub_(minm)
-            x.div_(denom)
-            x.pow_(g)
-            x.mul_(rnge)
-            x.add_(minm)
+        # Retain stats where needed
+        if ret_mask.any():
+            mn_here = x.mean(dim=spatial_dims, keepdim=True)
+            std_here = x.std(dim=spatial_dims, keepdim=True)
+            x_retained = (x - mn_here) * (stds_orig / std_here.clamp(min=eps)) + means_orig
+            ret_mask_bc = ret_mask.view(-1, *([1] * (x.ndim - 1)))
+            x = torch.where(ret_mask_bc, x_retained, x)
 
-            if r:
-                mn_here = x.mean()
-                std_here = x.std()
-                x.sub_(mn_here)
-                x.mul_(std / torch.clamp(std_here, min=eps))
-                x.add_(mean)
+        # Undo invert where needed
+        x = torch.where(inv_mask, -x, x)
 
-            if inv:
-                x.mul_(-1)
-
+        # Write back
+        img[idx] = x
         return img
 
 
