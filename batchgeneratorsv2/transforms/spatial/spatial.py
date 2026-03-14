@@ -5,9 +5,8 @@ import math
 
 import SimpleITK
 import numpy as np
-import pandas as pd
 import torch
-from scipy.ndimage import fourier_gaussian, gaussian_filter
+from scipy.ndimage import fourier_gaussian
 from torch import Tensor
 from torch.nn.functional import grid_sample
 
@@ -270,9 +269,8 @@ class SpatialTransform(BasicTransform):
                                          dtype=segmentation.dtype, device=grid.device)
                 if self.bg_style_seg_sampling:
                     for c in range(segmentation.shape[0]):
-                        labels = torch.from_numpy(np.sort(pd.unique(segmentation[c].cpu().numpy().ravel())))
-                        if grid.device.type != 'cpu':
-                            labels = labels.to(grid.device)
+                        labels = torch.unique(seg_dev[c]).sort().values
+                        # if we only have 2 labels then we can save compute time
                         if len(labels) == 2:
                             out = grid_sample(
                                 ((seg_dev[c] == labels[1]).float())[None, None],
@@ -284,34 +282,40 @@ class SpatialTransform(BasicTransform):
                             result_seg[c][out] = labels[1]
                             result_seg[c][~out] = labels[0]
                         else:
+                            # Batched grid_sample: build one-hot stack for all labels at once
+                            one_hot = (seg_dev[c].unsqueeze(0) == labels.view(-1, *([1] * seg_dev[c].ndim))).float()
+                            # one_hot shape: (num_labels, *spatial_dims)
+                            # grid_sample expects (N, C, *spatial), use N=1, C=num_labels
+                            resampled = grid_sample(
+                                one_hot[None],  # (1, num_labels, *spatial)
+                                grid[None].expand(1, -1, -1, -1, -1) if grid.ndim == 4 else grid[None].expand(1, -1, -1, -1),
+                                mode=self.mode_seg,
+                                padding_mode=self.border_mode_seg,
+                                align_corners=False
+                            )[0]  # (num_labels, *patch_size)
+                            # Assign labels where resampled >= 0.5, later labels override earlier
                             for i, u in enumerate(labels):
-                                result_seg[c][
-                                    grid_sample(
-                                        ((seg_dev[c] == u).float())[None, None],
-                                        grid[None],
-                                        mode=self.mode_seg,
-                                        padding_mode=self.border_mode_seg,
-                                        align_corners=False
-                                    )[0][0] >= 0.5] = u
+                                result_seg[c][resampled[i] >= 0.5] = u
                 else:
                     for c in range(segmentation.shape[0]):
-                        labels = torch.from_numpy(np.sort(pd.unique(segmentation[c].cpu().numpy().ravel())))
-                        if grid.device.type != 'cpu':
-                            labels = labels.to(grid.device)
-                        tmp = torch.zeros((len(labels), *self.patch_size), dtype=torch.float16, device=grid.device)
+                        labels = torch.unique(seg_dev[c]).sort().values
+                        # Batched grid_sample with scale_factor approach
+                        one_hot = (seg_dev[c].unsqueeze(0) == labels.view(-1, *([1] * seg_dev[c].ndim))).float()
                         scale_factor = 1000
+                        resampled = grid_sample(
+                            (one_hot * scale_factor)[None],
+                            grid[None].expand(1, -1, -1, -1, -1) if grid.ndim == 4 else grid[None].expand(1, -1, -1, -1),
+                            mode=self.mode_seg,
+                            padding_mode=self.border_mode_seg,
+                            align_corners=False
+                        )[0]  # (num_labels, *patch_size)
                         done_mask = torch.zeros(*self.patch_size, dtype=torch.bool, device=grid.device)
                         for i, u in enumerate(labels):
-                            tmp[i] = \
-                            grid_sample(((seg_dev[c] == u).float() * scale_factor)[None, None], grid[None],
-                                        mode=self.mode_seg, padding_mode=self.border_mode_seg, align_corners=False)[0][
-                                0]
-                            mask = tmp[i] > (0.7 * scale_factor)
+                            mask = resampled[i] > (0.7 * scale_factor)
                             result_seg[c][mask] = u
                             done_mask = done_mask | mask
                         if not torch.all(done_mask):
-                            result_seg[c][~done_mask] = labels[tmp[:, ~done_mask].argmax(0)]
-                        del tmp
+                            result_seg[c][~done_mask] = labels[resampled[:, ~done_mask].argmax(0)]
             del grid
             if self.device is not None:
                 result_seg = result_seg.to(orig_device)
