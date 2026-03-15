@@ -14,7 +14,7 @@ class LocalGammaTransform(ImageOnlyTransform, LocalTransform):
     in medical imaging or general contrast robustness.
 
     Parameters:
-        scale (RandomScalar): Controls the width of the Gaussian (std dev). Recommend large values (e.g. 10–30).
+        scale (RandomScalar): Controls the width of the Gaussian (std dev). Recommend large values (e.g. 10-30).
         loc (RandomScalar): Controls Gaussian center as a % of image size. E.g. (-1, 2) allows off-canvas kernels.
         gamma (RandomScalar): The gamma exponent applied locally. Try wild distributions :)
         same_for_all_channels (bool): If True, one kernel is reused across all channels. Otherwise sampled per-channel.
@@ -36,13 +36,14 @@ class LocalGammaTransform(ImageOnlyTransform, LocalTransform):
 
     def get_parameters(self, image: torch.Tensor, **kwargs) -> dict:
         C, *spatial = image.shape
+        device = image.device
         apply_channel = [np.random.rand() < self.p_per_channel for _ in range(C)]
 
         if not any(apply_channel):
             return {'kernels': [None] * C, 'gammas': [None] * C}
 
         if self.same_for_all_channels:
-            kernel = self._generate_kernel(spatial).astype(np.float32)
+            kernel = self._generate_kernel(spatial, device=device)
             gamma = sample_scalar(self.gamma)
 
             kernels = [kernel if apply else None for apply in apply_channel]
@@ -54,7 +55,7 @@ class LocalGammaTransform(ImageOnlyTransform, LocalTransform):
                     kernels.append(None)
                     gammas.append(None)
                     continue
-                kernel = self._generate_kernel(spatial).astype(np.float32)
+                kernel = self._generate_kernel(spatial, device=device)
                 gamma = sample_scalar(self.gamma)
                 kernels.append(kernel)
                 gammas.append(gamma)
@@ -62,27 +63,27 @@ class LocalGammaTransform(ImageOnlyTransform, LocalTransform):
         return {'kernels': kernels, 'gammas': gammas}
 
     def _apply_to_image(self, img: torch.Tensor, **params) -> torch.Tensor:
-        img_np = img.cpu().numpy()
-
         for c, (kernel, gamma) in enumerate(zip(params['kernels'], params['gammas'])):
             if kernel is None:
                 continue
 
-            channel = img_np[c]
-            min_val, max_val = channel.min(), channel.max()
-            denom = max(max_val - min_val, 1e-8)
+            kernel = kernel.to(img.device, dtype=img.dtype)
+            channel = img[c]
+            min_val = channel.min()
+            max_val = channel.max()
+            denom = max(float(max_val - min_val), 1e-8)
 
             # Normalize to [0, 1]
             norm = (channel - min_val) / denom
-            gamma_corrected = np.power(norm, gamma)
+            gamma_corrected = norm.pow(gamma)
 
             # Blend using kernel
             blended = self.run_interpolation(norm, gamma_corrected, kernel)
 
             # Rescale to original range
-            img_np[c] = blended * denom + min_val
+            img[c] = blended * denom + min_val
 
-        return torch.from_numpy(img_np).to(img.device, dtype=img.dtype)
+        return img
 
 
 if __name__ == '__main__':

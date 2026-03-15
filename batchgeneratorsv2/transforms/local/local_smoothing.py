@@ -1,7 +1,7 @@
 import torch
 import numpy as np
 from batchgeneratorsv2.transforms.local.local_transform import LocalTransform
-from scipy.ndimage import gaussian_filter
+from batchgeneratorsv2.transforms.noise.gaussian_blur import blur_dimension
 from batchgeneratorsv2.transforms.base.basic_transform import ImageOnlyTransform
 from batchgeneratorsv2.helpers.scalar_type import RandomScalar, sample_scalar
 
@@ -39,6 +39,7 @@ class LocalSmoothingTransform(ImageOnlyTransform, LocalTransform):
 
     def get_parameters(self, image: torch.Tensor, **kwargs) -> dict:
         C, *spatial = image.shape
+        device = image.device
         apply_channel = [np.random.rand() < self.p_per_channel for _ in range(C)]
 
         if not any(apply_channel):
@@ -47,7 +48,7 @@ class LocalSmoothingTransform(ImageOnlyTransform, LocalTransform):
         sigma = sample_scalar(self.kernel_size)
 
         if self.same_for_all_channels:
-            kernel = self._generate_kernel(spatial).astype(np.float32)
+            kernel = self._generate_kernel(spatial, device=device)
             strength = sample_scalar(self.smoothing_strength)
 
             kernels = [kernel if apply else None for apply in apply_channel]
@@ -59,7 +60,7 @@ class LocalSmoothingTransform(ImageOnlyTransform, LocalTransform):
                     kernels.append(None)
                     strengths.append(None)
                     continue
-                kernel = self._generate_kernel(spatial).astype(np.float32)
+                kernel = self._generate_kernel(spatial, device=device)
                 strength = sample_scalar(self.smoothing_strength)
                 kernels.append(kernel)
                 strengths.append(strength)
@@ -67,18 +68,20 @@ class LocalSmoothingTransform(ImageOnlyTransform, LocalTransform):
         return {'kernels': kernels, 'sigma': sigma, 'strengths': strengths}
 
     def _apply_to_image(self, img: torch.Tensor, **params) -> torch.Tensor:
-        img_np = img.cpu().numpy()
         sigma = params['sigma']
 
         for c, (kernel, strength) in enumerate(zip(params['kernels'], params['strengths'])):
             if kernel is None:
                 continue
 
-            kernel = kernel * strength  # scale kernel by smoothing strength
-            smoothed = gaussian_filter(img_np[c], sigma=sigma)
-            img_np[c] = self.run_interpolation(img_np[c], smoothed, kernel)
+            kernel = kernel.to(img.device) * strength
+            # Apply separable Gaussian blur using torch-native blur_dimension
+            smoothed = img[c:c+1].clone()
+            for d in range(img.ndim - 1):
+                smoothed = blur_dimension(smoothed, sigma, d)
+            img[c] = self.run_interpolation(img[c], smoothed[0], kernel)
 
-        return torch.from_numpy(img_np).to(img.device, dtype=img.dtype)
+        return img
 
 
 if __name__ == '__main__':
@@ -95,4 +98,3 @@ if __name__ == '__main__':
     image_aug = smoother._apply_to_image(image.clone(), **params)
 
     view_batch(image, image_aug)
-

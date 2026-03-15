@@ -1,7 +1,5 @@
 import torch
 import numpy as np
-from typing import List
-
 from batchgeneratorsv2.transforms.base.basic_transform import ImageOnlyTransform
 from batchgeneratorsv2.helpers.scalar_type import RandomScalar, sample_scalar
 from batchgeneratorsv2.transforms.local.local_transform import LocalTransform
@@ -89,6 +87,7 @@ class BrightnessGradientAdditiveTransform(ImageOnlyTransform, LocalTransform):
 
     def get_parameters(self, image: torch.Tensor, **kwargs) -> dict:
         C, *spatial = image.shape
+        device = image.device
         apply_channel = [np.random.rand() < self.p_per_channel for _ in range(C)]
 
         # Early exit if nothing will be applied
@@ -96,11 +95,11 @@ class BrightnessGradientAdditiveTransform(ImageOnlyTransform, LocalTransform):
             return {'kernels': [None] * C}
 
         if self.same_for_all_channels:
-            kernel = self._generate_kernel(spatial)
+            kernel = self._generate_kernel(spatial, device=device)
             if self.mean_centered:
-                kernel -= kernel.mean()
+                kernel = kernel - kernel.mean()
 
-            max_abs = np.abs(kernel).max()
+            max_abs = kernel.abs().max().item()
             if max_abs < 1e-8:
                 return {'kernels': [None] * C}
 
@@ -108,8 +107,7 @@ class BrightnessGradientAdditiveTransform(ImageOnlyTransform, LocalTransform):
             if strength == 0.0:
                 return {'kernels': [None] * C}
 
-            kernel /= max_abs
-            kernel *= strength
+            kernel = kernel / max_abs * strength
 
             kernels = [kernel if apply else None for apply in apply_channel]
 
@@ -120,10 +118,10 @@ class BrightnessGradientAdditiveTransform(ImageOnlyTransform, LocalTransform):
                     kernels.append(None)
                     continue
 
-                kernel = self._generate_kernel(spatial)
+                kernel = self._generate_kernel(spatial, device=device)
                 if self.mean_centered:
-                    kernel -= kernel.mean()
-                max_abs = np.abs(kernel).max()
+                    kernel = kernel - kernel.mean()
+                max_abs = kernel.abs().max().item()
                 if max_abs < 1e-8:
                     kernels.append(None)
                     continue
@@ -133,8 +131,7 @@ class BrightnessGradientAdditiveTransform(ImageOnlyTransform, LocalTransform):
                     kernels.append(None)
                     continue
 
-                kernel /= max_abs
-                kernel *= strength
+                kernel = kernel / max_abs * strength
                 kernels.append(kernel)
 
         return {'kernels': kernels}
@@ -143,8 +140,7 @@ class BrightnessGradientAdditiveTransform(ImageOnlyTransform, LocalTransform):
         for c, kernel in enumerate(params['kernels']):
             if kernel is None:
                 continue
-            kernel_tensor = torch.from_numpy(kernel).to(img.device, dtype=img.dtype)
-            img[c].add_(kernel_tensor)
+            img[c].add_(kernel.to(img.device, dtype=img.dtype))
 
         if self.clip_intensities:
             img.clamp_(min=img.min(), max=img.max())

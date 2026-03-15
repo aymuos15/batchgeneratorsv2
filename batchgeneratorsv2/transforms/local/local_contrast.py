@@ -34,13 +34,14 @@ class LocalContrastTransform(ImageOnlyTransform, LocalTransform):
 
     def get_parameters(self, image: torch.Tensor, **kwargs) -> dict:
         C, *spatial = image.shape
+        device = image.device
         apply_channel = [np.random.rand() < self.p_per_channel for _ in range(C)]
 
         if not any(apply_channel):
             return {'kernels': [None] * C, 'contrasts': [None] * C}
 
         if self.same_for_all_channels:
-            kernel = self._generate_kernel(spatial).astype(np.float32)
+            kernel = self._generate_kernel(spatial, device=device)
             contrast = sample_scalar(self.new_contrast)
 
             kernels = [kernel if apply else None for apply in apply_channel]
@@ -52,7 +53,7 @@ class LocalContrastTransform(ImageOnlyTransform, LocalTransform):
                     kernels.append(None)
                     contrasts.append(None)
                     continue
-                kernel = self._generate_kernel(spatial).astype(np.float32)
+                kernel = self._generate_kernel(spatial, device=device)
                 contrast = sample_scalar(self.new_contrast)
                 kernels.append(kernel)
                 contrasts.append(contrast)
@@ -60,18 +61,17 @@ class LocalContrastTransform(ImageOnlyTransform, LocalTransform):
         return {'kernels': kernels, 'contrasts': contrasts}
 
     def _apply_to_image(self, img: torch.Tensor, **params) -> torch.Tensor:
-        img_np = img.cpu().numpy()
-
         for c, (kernel, contrast) in enumerate(zip(params['kernels'], params['contrasts'])):
             if kernel is None:
                 continue
 
-            channel = img_np[c]
+            kernel = kernel.to(img.device, dtype=img.dtype)
+            channel = img[c]
             mean = (channel * kernel).sum() / (kernel.sum() + 1e-8)
             modified = (channel - mean) * contrast + mean
-            img_np[c] = self.run_interpolation(channel, modified, kernel)
+            img[c] = self.run_interpolation(channel, modified, kernel)
 
-        return torch.from_numpy(img_np).to(img.device, dtype=img.dtype)
+        return img
 
 
 if __name__ == '__main__':
